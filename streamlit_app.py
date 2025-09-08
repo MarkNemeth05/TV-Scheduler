@@ -37,7 +37,7 @@ class Slot:
     importance: str | None = None
     revenue: float = 0.0
 
-# ───────── Tables (same logic as before) ─────────
+# ───────── Tables (same scheduling logic) ─────────
 TIME_TABLE: Dict[int, Dict[Audience, float]] = {}
 for h in range(8, 12): TIME_TABLE[h] = {"Kids": 1.0, "Teen": 0.9, "Adults": 0.8}
 for h in range(12, 16): TIME_TABLE[h] = {"Kids": 0.9, "Teen": 1.0, "Adults": 0.8}
@@ -228,74 +228,82 @@ def analyze_ad(slots: List[Slot], ad: Ad) -> Dict[str, float | int]:
         if ad.target in ctx: match += 1
     return {"total_plays": total, "required": req, "pct_quota": round(quota, 1), "match_plays": match, "pct_match": round((match/total*100) if total else 0.0, 1)}
 
-# ── Pretty summary helpers ──────────────────────────────────────────────
-def _fmt(t): 
-    return t.strftime("%H:%M:%S")
-
-def build_blocks(slots):
-    """
-    Turns the flat schedule into alternating 'movie part' and 'ad break' blocks.
-    Each movie part is followed by a single break block whose revenue is the
-    sum of all ad revenues until the next movie begins.
-    """
+# ───────── Summary builders ─────────
+def build_blocks(slots: List[Slot]):
+    """Alternate movie part rows and the immediately following ad-break (with total revenue)."""
     blocks = []
     i, n = 0, len(slots)
     while i < n:
         s = slots[i]
         if s.content_type == "movie":
-            # movie card
-            blocks.append({
-                "kind": "movie",
-                "title": s.title,
-                "start": s.start_time,
-                "end": s.end_time,
-                "revenue": 0.0,
-            })
+            blocks.append({"kind":"movie","title":s.title,"start":s.start_time,"end":s.end_time,"revenue":0.0})
             i += 1
-
-            # collect the following ads (one break)
+            # ads until next movie = one break
             rev, start, end = 0.0, None, None
             while i < n and slots[i].content_type == "ad":
                 if start is None: start = slots[i].start_time
                 rev += float(slots[i].revenue or 0.0)
                 end = slots[i].end_time
                 i += 1
-
             if start is not None and end is not None:
-                blocks.append({
-                    "kind": "break",
-                    "title": "Ad Break",
-                    "start": start,
-                    "end": end,
-                    "revenue": rev,
-                })
+                blocks.append({"kind":"break","title":"Ad Break","start":start,"end":end,"revenue":rev})
         else:
-            # (safety) skip anything unexpected
             i += 1
     return blocks
 
-# ───────── UI (centered row of controls; results underneath) ─────────
+def hourly_revenue_cumulative(slots: List[Slot]) -> pd.DataFrame:
+    """Cumulative revenue by hour (08..23)."""
+    start_hour, end_hour = 8, 23
+    idx = pd.date_range(
+        start=slots[0].start_time.replace(hour=start_hour, minute=0, second=0, microsecond=0) if slots else today_at(start_hour),
+        end=today_at(end_hour),
+        freq="H"
+    )
+    if not slots:
+        return pd.DataFrame({"revenue": [0]*len(idx)}, index=idx)
+
+    rows = [{"time": s.end_time, "rev": float(s.revenue or 0.0)} for s in slots if s.content_type=="ad"]
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame({"revenue": [0]*len(idx)}, index=idx)
+    ser = df.set_index("time")["rev"].resample("H").sum().reindex(idx, fill_value=0)
+    cum = ser.cumsum()
+    return pd.DataFrame({"revenue": cum})
+
+# ───────── UI (centered controls; summary table + chart) ─────────
 st.set_page_config(page_title="TV Scheduler (ChatGPT × Márk Németh)", layout="wide")
 st.markdown("<h1 style='text-align:center;margin-top:0;'>TV Scheduler</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align:center;color:gray;'>Made by ChatGPT, based on the work by Márk Németh</p>", unsafe_allow_html=True)
 
-# Initialize session state once
-defaults = {
-    "movies_df": None,
-    "ads_df": None,
-    "movies": [],
-    "ads": [],
-    "sel_movies": [],
-    "sel_ads": [],
-    "slots": [],
-    "df": pd.DataFrame(),
-    "ran": False,
+# CSS: sticky table look, uses the same red tone as Streamlit tags for movie rows
+st.markdown("""
+<style>
+.summary-table { width:100%; border-collapse: collapse; table-layout: fixed; }
+.summary-table th, .summary-table td {
+  padding: 10px 12px; border: 1px solid rgba(255,255,255,0.08);
+  font-size: 14px; line-height: 1.2;
 }
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+.summary-table th { position: sticky; top: 0; background: rgba(0,0,0,0.25); backdrop-filter: blur(4px); z-index: 2; }
+.row-movie { background: #ef4444; color: white; }  /* red-500 like the multiselect chips */
+.row-break { background: rgba(255,255,255,0.04); color: inherit; }
+.badge {
+  background: #111; color: #fff; border-radius: 999px; padding: 4px 10px; font-size: 12px;
+  display: inline-block;
+}
+.timecell { font-weight: 700; width: 28%; font-variant-numeric: tabular-nums; }
+.titlecell { width: 52%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.revcell  { width: 20%; text-align: right; }
+.row-movie .titlecell { font-weight: 700; letter-spacing: .2px; }
+.row-break .titlecell { font-weight: 600; }
+</style>
+""", unsafe_allow_html=True)
 
-# A single centered row with ALL controls
+# Initialize session state once
+defaults = {"movies_df": None, "ads_df": None, "movies": [], "ads": [], "sel_movies": [], "sel_ads": [], "slots": [], "df": pd.DataFrame(), "ran": False}
+for k, v in defaults.items():
+    if k not in st.session_state: st.session_state[k] = v
+
+# Controls row
 outer_left, center, outer_right = st.columns([1, 6, 1])
 with center:
     c1, c2, c3, c4, c5 = st.columns([1.2, 1.2, 1.6, 1.6, 0.9])
@@ -305,11 +313,9 @@ with center:
     with c2:
         ad_file = st.file_uploader("ad_dataset.xlsx", type=["xlsx", "xls"], key="ad_upload")
 
-    # Read uploads only when provided; otherwise keep previous data in state
     if mv_file is not None:
         st.session_state["movies_df"] = pd.read_excel(io.BytesIO(mv_file.getvalue()))
         st.session_state["movies"] = rows_to_movies(st.session_state["movies_df"])
-        # refresh default selections
         st.session_state["sel_movies"] = [f"{m.title} | {m.target_audience}" for m in st.session_state["movies"]]
 
     if ad_file is not None:
@@ -319,15 +325,11 @@ with center:
 
     with c3:
         mv_labels = [f"{m.title} | {m.target_audience}" for m in st.session_state["movies"]]
-        st.session_state["sel_movies"] = st.multiselect(
-            "Movies", options=mv_labels, default=st.session_state["sel_movies"], key="mv_pick"
-        )
+        st.session_state["sel_movies"] = st.multiselect("Movies", options=mv_labels, default=st.session_state["sel_movies"], key="mv_pick")
 
     with c4:
         ad_labels = [f"{a.ad_title} | {a.target} | {a.importance} | {rps(a):.2f}" for a in st.session_state["ads"]]
-        st.session_state["sel_ads"] = st.multiselect(
-            "Ads", options=ad_labels, default=st.session_state["sel_ads"], key="ad_pick"
-        )
+        st.session_state["sel_ads"] = st.multiselect("Ads", options=ad_labels, default=st.session_state["sel_ads"], key="ad_pick")
 
     def generate():
         movies = [m for m in st.session_state["movies"] if f"{m.title} | {m.target_audience}" in st.session_state["sel_movies"]]
@@ -341,55 +343,56 @@ with center:
     with c5:
         st.button("Generate", type="primary", use_container_width=True, on_click=generate)
 
-# Results below the control row
+# Results
 with center:
     st.markdown("---")
-    r1, r2 = st.columns([3, 2])
+    left_area, right_area = st.columns([3, 2])
 
-    with r1:
-        st.subheader("Optimized Schedule")
-        if st.session_state["ran"] and not st.session_state["df"].empty:
-            st.dataframe(st.session_state["df"], use_container_width=True, height=420)
-            csv = st.session_state["df"].to_csv(index=False).encode("utf-8")
-            st.download_button("Download CSV", data=csv, file_name="tv_schedule.csv", mime="text/csv")
-            st.caption("Window: 08:00–23:00. Movies split into 3 parts with 360s mid-rolls; 900s between movies. Ads chosen by audience score → importance (until quota) → revenue/sec; avoid same-category back-to-back & duplicate titles; shift times when a break underruns.")
-
-            # ── Compact visual timeline (cards) ───────────────────────────
+    with left_area:
+        st.subheader("Summary")
+        if st.session_state["ran"] and st.session_state["slots"]:
             blocks = build_blocks(st.session_state["slots"])
-            if blocks:
-                st.markdown("#### Timeline overview")
-                # 3 cards per row
-                for row_start in range(0, len(blocks), 3):
-                    cols = st.columns(3)
-                    for k, b in enumerate(blocks[row_start:row_start+3]):
-                        with cols[k]:
-                            bg = "#eef6ff" if b["kind"] == "movie" else "#fff7ed"
-                            label = "Movie part" if b["kind"] == "movie" else "Ad break"
-                            title = b["title"]
-                            subtitle = f"{_fmt(b['start'])}–{_fmt(b['end'])}"
-                            revenue = f"${b['revenue']:.0f}"
 
-                            st.markdown(
-                                f"""
-<div style="
-  border-radius:16px;padding:14px;
-  background:{bg};border:1px solid rgba(0,0,0,.06);
-  box-shadow:0 1px 2px rgba(0,0,0,.04);
-">
-  <div style="font-weight:600;margin-bottom:6px;font-size:16px;line-height:1.2;">{title}</div>
-  <div style="font-size:12px;color:#666;margin-bottom:10px;">{subtitle}</div>
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <span style="font-size:12px;">{label}</span>
-    <span style="background:#111;color:#fff;border-radius:999px;padding:4px 10px;font-size:12px;">{revenue}</span>
-  </div>
-</div>
-""",
-                                unsafe_allow_html=True,
-                            )
+            # Render compact, stuck table
+            html = ["<div style='max-height:520px;overflow:auto;border-radius:12px;border:1px solid rgba(255,255,255,0.08);'>"]
+            html.append("<table class='summary-table'>")
+            html.append("<thead><tr><th class='timecell'>Time</th><th class='titlecell'>Title</th><th class='revcell'>Revenue</th></tr></thead><tbody>")
+            for b in blocks:
+                row_cls = "row-movie" if b["kind"] == "movie" else "row-break"
+                time_str = f"{b['start'].strftime('%H:%M')} – {b['end'].strftime('%H:%M')}"
+                title = b["title"]
+                rev = f"${b['revenue']:.0f}"
+                html.append(
+                    f"<tr class='{row_cls}'>"
+                    f"<td class='timecell'>{time_str}</td>"
+                    f"<td class='titlecell'>{title}</td>"
+                    f"<td class='revcell'><span class='badge'>{rev}</span></td>"
+                    f"</tr>"
+                )
+            html.append("</tbody></table></div>")
+            st.markdown("\n".join(html), unsafe_allow_html=True)
+
+            # Also keep the classic CSV/table download for power users
+            with st.expander("Detailed table (export)"):
+                st.dataframe(st.session_state["df"], use_container_width=True, height=320)
+                csv = st.session_state["df"].to_csv(index=False).encode("utf-8")
+                st.download_button("Download CSV", data=csv, file_name="tv_schedule.csv", mime="text/csv")
+
         else:
-            st.info("Upload both files, pick items, then click **Generate**.")
+            st.info("Upload both files, choose items, then click **Generate**.")
 
-    with r2:
+    with right_area:
+        st.subheader("Revenue by Hour")
+        if st.session_state["ran"] and st.session_state["slots"]:
+            rev_df = hourly_revenue_cumulative(st.session_state["slots"])
+            # Nice index labels (HH:00)
+            rev_df.index = rev_df.index.strftime("%H:00")
+            st.line_chart(rev_df, height=360, use_container_width=True)
+            total_rev = rev_df["revenue"].iloc[-1] if not rev_df.empty else 0.0
+            st.caption(f"Cumulative revenue (08:00–23:00). Total: ${total_rev:,.0f}")
+        else:
+            st.info("Generate a schedule to see revenue over the day.")
+
         st.subheader("Ad Analysis")
         if st.session_state["ran"] and st.session_state["slots"] and st.session_state["ads"]:
             ad_opts = [f"{a.ad_title} | {a.target} | {a.importance} | {rps(a):.2f}" for a in st.session_state["ads"]]
@@ -404,6 +407,6 @@ with center:
                 f"• Plays on matching breaks: {stats['match_plays']}",
                 f"• % matching context: {stats['pct_match']}%",
             ])
-            st.text_area("Details", value=details, height=240)
+            st.text_area("Details", value=details, height=160)
         else:
             st.info("Generate a schedule to analyze ad delivery.")
