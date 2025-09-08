@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple
 
-# ===== Types =====
+# ───────────────────────── Types ─────────────────────────
 Audience = str  # "Kids" | "Teen" | "Adults"
 
 @dataclass
@@ -35,7 +35,7 @@ class Slot:
     importance: str | None = None
     revenue: float = 0.0
 
-# ===== Parameter Tables =====
+# ─────────────────── Parameter Tables ───────────────────
 TIME_TABLE: Dict[int, Dict[Audience, float]] = {}
 for h in range(8, 12): TIME_TABLE[h] = {"Kids": 1.0, "Teen": 0.9, "Adults": 0.8}
 for h in range(12, 16): TIME_TABLE[h] = {"Kids": 0.9, "Teen": 1.0, "Adults": 0.8}
@@ -65,7 +65,7 @@ BETWEEN_TABLE: Dict[str, Dict[Audience, float]] = {
     "Adults|Adults": {"Kids": 0.08, "Teen": 0.09, "Adults": 0.10},
 }
 
-# ===== Helpers =====
+# ─────────────────────── Helpers ───────────────────────
 def split_into_parts(duration: int) -> List[int]:
     base = duration // 3
     parts = [base, base, base]
@@ -80,7 +80,7 @@ def today_at(h: int, m: int = 0, s: int = 0) -> datetime:
 def rps(ad: Ad) -> float:
     return ad.revenue_on_ad / max(1, ad.duration_sec)
 
-# ===== Core Scheduling =====
+# ────────────────── Core Scheduling ──────────────────
 def schedule_all_movies(movies: List[Movie]) -> Tuple[List[Slot], List[Movie]]:
     schedule: List[Slot] = []
     pool = movies.copy()
@@ -95,8 +95,8 @@ def schedule_all_movies(movies: List[Movie]) -> Tuple[List[Slot], List[Movie]]:
             wg = GENRE_TABLE.get(m.genre, {}).get(m.target_audience, 0.0)
             scored.append((round(wt + wg, 4), m))
         scored.sort(key=lambda x: (-x[0], x[1].duration_sec))
-
         best = scored[0][1]
+
         for i, dur in enumerate(split_into_parts(best.duration_sec)):
             end = current + timedelta(seconds=dur)
             schedule.append(Slot(current, end, "movie", f"{best.title} (Part {i+1}/3)", best.target_audience))
@@ -143,14 +143,17 @@ def fill_ad_breaks(schedule_in: List[Slot], ads: List[Ad]) -> List[Slot]:
                 if ad.duration_sec > left: continue
                 if ad.category == last_cat: continue
                 if ad.ad_title in used_titles: continue
+
                 played = usage.get(ad.ad_title, 0)
                 eff_imp = "mid" if (ad.importance == "priority" and played >= ad.at_least_times_played) else ad.importance
                 imp_score = 1.0 if eff_imp == "priority" else 0.9
                 table = MID_ROLL_TABLE[prev_aud] if slot.title == "MID-ROLL" else BETWEEN_TABLE[f"{prev_aud}|{next_aud}"]
                 base = table.get(ad.target, 0.0)
                 cands.append((base, imp_score, rps(ad), ad, eff_imp))
+
             if not cands:
                 break
+
             cands.sort(key=lambda x: (-x[0], -x[1], -x[2]))
             _, _, _, pick, eff_imp = cands[0]
             end_t = cur_t + timedelta(seconds=pick.duration_sec)
@@ -162,6 +165,7 @@ def fill_ad_breaks(schedule_in: List[Slot], ads: List[Ad]) -> List[Slot]:
             if eff_imp == "priority":
                 usage[pick.ad_title] = usage.get(pick.ad_title, 0) + 1
 
+        # shift downstream items
         used_time = int((cur_t - slot.start_time).total_seconds())
         slot_dur = int((slot.end_time - slot.start_time).total_seconds())
         shift = used_time - slot_dur
@@ -173,7 +177,7 @@ def fill_ad_breaks(schedule_in: List[Slot], ads: List[Ad]) -> List[Slot]:
 
     return final
 
-# ===== IO Helpers =====
+# ───────────────────── IO Helpers ─────────────────────
 def rows_to_movies(df: pd.DataFrame) -> List[Movie]:
     if df.empty: return []
     def g(r, *names):
@@ -237,17 +241,36 @@ def analyze_ad(slots: List[Slot], ad: Ad) -> Dict[str, float | int]:
         if ad.target in ctx: match += 1
     return {"total_plays": total, "required": req, "pct_quota": round(quota, 1), "match_plays": match, "pct_match": round((match/total*100) if total else 0.0, 1)}
 
-# ===== UI =====
+# ───────────────────────── UI ─────────────────────────
 st.set_page_config(page_title="TV Scheduler (ChatGPT × Márk Németh)", layout="wide")
-st.title("TV Scheduler")
-st.caption("Made by ChatGPT, based on the work by Márk Németh")
 
-with st.sidebar:
-    st.header("Load data")
-    use_demo = st.toggle("Use small demo data", value=False)
-    mv_file = st.file_uploader("movie_dataset.xlsx", type=["xlsx", "xls"])
-    ad_file = st.file_uploader("ad_dataset.xlsx", type=["xlsx", "xls"])
-    if use_demo and not mv_file and not ad_file:
+# Make everything visible and centered (no sidebar)
+left, mid, right = st.columns([1, 5, 1])
+with mid:
+    st.title("TV Scheduler")
+    st.caption("Made by ChatGPT, based on the work by Márk Németh")
+
+    # Session defaults
+    for k, v in {
+        "ran": False,
+        "slots": [],
+        "df": pd.DataFrame(),
+        "movies_list": [],
+        "ads_list": [],
+    }.items():
+        if k not in st.session_state: st.session_state[k] = v
+
+    st.subheader("Load data")
+    c1, c2, c3 = st.columns([2, 2, 1])
+    with c1:
+        mv_file = st.file_uploader("movie_dataset.xlsx", type=["xlsx", "xls"], key="mv_upl")
+    with c2:
+        ad_file = st.file_uploader("ad_dataset.xlsx", type=["xlsx", "xls"], key="ad_upl")
+    with c3:
+        use_demo = st.checkbox("Use demo data", value=False)
+
+    # Build dataframes
+    if use_demo and (mv_file is None and ad_file is None):
         mv_df = pd.DataFrame({
             "title": ["Ocean Quest", "Laugh Lane", "Spy Night"],
             "genre": ["Kids", "Comedy", "Thriller"],
@@ -269,50 +292,63 @@ with st.sidebar:
 
     movies = rows_to_movies(mv_df) if not mv_df.empty else []
     ads = rows_to_ads(ad_df) if not ad_df.empty else []
+    st.session_state["movies_list"] = movies
+    st.session_state["ads_list"] = ads
 
     st.subheader("Selections")
     mv_labels = [f"{m.title} | {m.target_audience}" for m in movies]
     ad_labels = [f"{a.ad_title} | {a.target} | {a.importance} | {rps(a):.2f}" for a in ads]
-    sel_movies = st.multiselect("Movies", mv_labels, default=mv_labels)
-    sel_ads = st.multiselect("Ads", ad_labels, default=ad_labels)
+
+    # Always-visible selectors in the middle
+    s1, s2 = st.columns(2)
+    with s1:
+        sel_movies = st.multiselect("Movies", options=mv_labels, default=mv_labels, key="mv_sel")
+    with s2:
+        sel_ads = st.multiselect("Ads", options=ad_labels, default=ad_labels, key="ad_sel")
+
     sel_movie_objs = [m for m in movies if f"{m.title} | {m.target_audience}" in sel_movies]
     sel_ad_objs = [a for a in ads if f"{a.ad_title} | {a.target} | {a.importance} | {rps(a):.2f}" in sel_ads]
-    run = st.button("Run Schedule", type="primary")
 
-col1, col2 = st.columns([2, 1])
+    # Generate button that PERSISTS state across reruns
+    def generate():
+        base, _ = schedule_all_movies(sel_movie_objs)
+        filled = fill_ad_breaks(base, sel_ad_objs)
+        st.session_state["slots"] = filled
+        st.session_state["df"] = schedule_to_df(filled)
+        st.session_state["ran"] = True
 
-if run:
-    base, _ = schedule_all_movies(sel_movie_objs)
-    filled = fill_ad_breaks(base, sel_ad_objs)
-    df = schedule_to_df(filled)
+    st.button("Generate Schedule", type="primary", on_click=generate)
 
-    with col1:
+    # Results + Analysis stay visible after any interaction
+    r1, r2 = st.columns([3, 2])
+    with r1:
         st.subheader("Optimized Schedule")
-        st.dataframe(df, use_container_width=True)
-        st.download_button("Download CSV", df.to_csv(index=False).encode("utf-8"), "tv_schedule.csv", "text/csv")
-        st.caption("Window: 08:00–23:00. Movies split into 3 parts with 360s mid-rolls. 900s between movies. Ads chosen by audience score → importance (until quota) → revenue/sec; avoid same-category back-to-back & duplicate titles within a break; shift times if a break underruns.")
-
-    with col2:
-        st.subheader("Ad Analysis")
-        if sel_ad_objs:
-            ad_choice = st.selectbox(
-                "Select an ad",
-                [f"{a.ad_title} | {a.target} | {a.importance} | {rps(a):.2f}" for a in sel_ad_objs],
-            )
-            chosen = next(a for a in sel_ad_objs if f"{a.ad_title} | {a.target} | {a.importance} | {rps(a):.2f}" == ad_choice)
-            stats = analyze_ad(filled, chosen)
-
-            # Build the details string separately to avoid any parenthesis issues
-            details = "\n".join([
-                f"Ad Analysis: {chosen.ad_title}",
-                f"• Required plays: {stats['required']}",
-                f"• Actual total plays: {stats['total_plays']}",
-                f"• % of quota fulfilled: {stats['pct_quota']}%",
-                f"• Plays on matching breaks: {stats['match_plays']}",
-                f"• % matching context: {stats['pct_match']}%",
-            ])
-            st.text_area("Details", value=details, height=180)
+        if st.session_state["ran"] and not st.session_state["df"].empty:
+            st.dataframe(st.session_state["df"], use_container_width=True)
+            csv = st.session_state["df"].to_csv(index=False).encode("utf-8")
+            st.download_button("Download CSV", data=csv, file_name="tv_schedule.csv", mime="text/csv")
+            st.caption("Window: 08:00–23:00. Movies split into 3 parts with 360s mid-rolls; 900s between movies. Ads: audience score → importance (until quota) → revenue/sec; avoid same-category back-to-back & duplicate titles in a break; shift times if a break underruns.")
         else:
-            st.info("Load ads to analyze their delivery and context match.")
-else:
-    st.info("Upload spreadsheets (or toggle demo data), pick items, then click **Run Schedule**.")
+            st.info("Load data, choose selections, then click **Generate Schedule**.")
+
+    with r2:
+        st.subheader("Ad Analysis")
+        if st.session_state["ran"] and st.session_state["slots"]:
+            ad_opts = [f"{a.ad_title} | {a.target} | {a.importance} | {rps(a):.2f}" for a in st.session_state["ads_list"]]
+            if ad_opts:
+                ad_choice = st.selectbox("Select an ad", options=ad_opts, key="ad_choice")
+                chosen = next(a for a in st.session_state["ads_list"] if f"{a.ad_title} | {a.target} | {a.importance} | {rps(a):.2f}" == ad_choice)
+                stats = analyze_ad(st.session_state["slots"], chosen)
+                details = "\n".join([
+                    f"Ad Analysis: {chosen.ad_title}",
+                    f"• Required plays: {stats['required']}",
+                    f"• Actual total plays: {stats['total_plays']}",
+                    f"• % of quota fulfilled: {stats['pct_quota']}%",
+                    f"• Plays on matching breaks: {stats['match_plays']}",
+                    f"• % matching context: {stats['pct_match']}%",
+                ])
+                st.text_area("Details", value=details, height=200)
+            else:
+                st.info("No ads loaded yet.")
+        else:
+            st.info("Generate a schedule to analyze ad delivery.")
