@@ -252,23 +252,36 @@ def build_blocks(slots: List[Slot]):
     return blocks
 
 def hourly_revenue_cumulative(slots: List[Slot]) -> pd.DataFrame:
-    """Cumulative revenue by hour (08..23)."""
-    start_hour, end_hour = 8, 23
-    idx = pd.date_range(
-        start=slots[0].start_time.replace(hour=start_hour, minute=0, second=0, microsecond=0) if slots else today_at(start_hour),
-        end=today_at(end_hour),
-        freq="H"
-    )
-    if not slots:
-        return pd.DataFrame({"revenue": [0]*len(idx)}, index=idx)
+    """Revenue per hour bucket: 08–09, 09–10, … , 22–23 (not cumulative)."""
+    start = today_at(8, 0, 0)
+    end = today_at(23, 0, 0)
 
-    rows = [{"time": s.end_time, "rev": float(s.revenue or 0.0)} for s in slots if s.content_type=="ad"]
+    # Hour bucket starts: 08:00..22:00 (each represents [hh:00, hh+1:00))
+    bucket_index = pd.date_range(start=start, end=end, freq="H")[:-1]
+
+    if not slots:
+        return pd.DataFrame({"revenue": [0.0] * len(bucket_index)}, index=bucket_index)
+
+    rows = [
+        {"time": s.end_time, "rev": float(s.revenue or 0.0)}
+        for s in slots
+        if s.content_type == "ad"
+    ]
     df = pd.DataFrame(rows)
     if df.empty:
-        return pd.DataFrame({"revenue": [0]*len(idx)}, index=idx)
-    ser = df.set_index("time")["rev"].resample("H").sum().reindex(idx, fill_value=0)
-    cum = ser.cumsum()
-    return pd.DataFrame({"revenue": cum})
+        return pd.DataFrame({"revenue": [0.0] * len(bucket_index)}, index=bucket_index)
+
+    # Sum revenue into hourly buckets labeled by the left edge (hh:00)
+    hourly = (
+        df.set_index("time")["rev"]
+        .sort_index()
+        .resample("H", label="left", closed="left")
+        .sum()
+        .reindex(bucket_index, fill_value=0.0)
+    )
+
+    return pd.DataFrame({"revenue": hourly})
+
 
 # ───────── UI (centered controls; summary table + chart) ─────────
 st.set_page_config(page_title="TV Scheduler (ChatGPT × Márk Németh)", layout="wide")
@@ -384,12 +397,15 @@ with center:
     with right_area:
         st.subheader("Revenue by Hour")
         if st.session_state["ran"] and st.session_state["slots"]:
-            rev_df = hourly_revenue_cumulative(st.session_state["slots"])
-            # Nice index labels (HH:00)
-            rev_df.index = rev_df.index.strftime("%H:00")
+            # Labels like "08–09", "09–10", …
+            rev_df.index = [
+                f"{idx.strftime('%H')}-{(idx + pd.Timedelta(hours=1)).strftime('%H')}"
+                for idx in rev_df.index
+            ]
             st.line_chart(rev_df, height=360, use_container_width=True)
-            total_rev = rev_df["revenue"].iloc[-1] if not rev_df.empty else 0.0
-            st.caption(f"Cumulative revenue (08:00–23:00). Total: ${total_rev:,.0f}")
+            total_rev = float(rev_df["revenue"].sum()) if not rev_df.empty else 0.0
+            st.caption(f"Hourly revenue (08–23). Total: ${total_rev:,.0f}")
+
         else:
             st.info("Generate a schedule to see revenue over the day.")
 
