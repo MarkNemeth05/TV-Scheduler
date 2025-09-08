@@ -227,7 +227,8 @@ def analyze_ad(slots: List[Slot], ad: Ad) -> Dict[str, float | int]:
         ctx = {prev.audience} if (prev and s.title == "MID-ROLL") else {prev.audience if prev else None, nextm.audience if nextm else None}
         if ad.target in ctx: match += 1
     return {"total_plays": total, "required": req, "pct_quota": round(quota, 1), "match_plays": match, "pct_match": round((match/total*100) if total else 0.0, 1)}
-#--------Summary helper-------------
+
+# ── Pretty summary helpers ──────────────────────────────────────────────
 def _fmt(t): 
     return t.strftime("%H:%M:%S")
 
@@ -276,6 +277,7 @@ def build_blocks(slots):
 # ───────── UI (centered row of controls; results underneath) ─────────
 st.set_page_config(page_title="TV Scheduler (ChatGPT × Márk Németh)", layout="wide")
 st.markdown("<h1 style='text-align:center;margin-top:0;'>TV Scheduler</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;color:gray;'>Made by ChatGPT, based on the work by Márk Németh</p>", unsafe_allow_html=True)
 
 # Initialize session state once
 defaults = {
@@ -351,39 +353,39 @@ with center:
             csv = st.session_state["df"].to_csv(index=False).encode("utf-8")
             st.download_button("Download CSV", data=csv, file_name="tv_schedule.csv", mime="text/csv")
             st.caption("Window: 08:00–23:00. Movies split into 3 parts with 360s mid-rolls; 900s between movies. Ads chosen by audience score → importance (until quota) → revenue/sec; avoid same-category back-to-back & duplicate titles; shift times when a break underruns.")
-            # ── Compact visual timeline (cards) ─────────────────────────────────────
+
+            # ── Compact visual timeline (cards) ───────────────────────────
             blocks = build_blocks(st.session_state["slots"])
             if blocks:
                 st.markdown("#### Timeline overview")
                 # 3 cards per row
                 for row_start in range(0, len(blocks), 3):
-                cols = st.columns(3)
-                for k, b in enumerate(blocks[row_start:row_start+3]):
-                    with cols[k]:
-                        bg = "#eef6ff" if b["kind"] == "movie" else "#fff7ed"
-                        label = "Movie part" if b["kind"] == "movie" else "Ad break"
-                        title = b["title"]
-                        subtitle = f"{_fmt(b['start'])}–{_fmt(b['end'])}"
-                        revenue = f"${b['revenue']:.0f}"
+                    cols = st.columns(3)
+                    for k, b in enumerate(blocks[row_start:row_start+3]):
+                        with cols[k]:
+                            bg = "#eef6ff" if b["kind"] == "movie" else "#fff7ed"
+                            label = "Movie part" if b["kind"] == "movie" else "Ad break"
+                            title = b["title"]
+                            subtitle = f"{_fmt(b['start'])}–{_fmt(b['end'])}"
+                            revenue = f"${b['revenue']:.0f}"
 
-                        st.markdown(
-                            f"""
-                <div style="
-                    border-radius:16px;padding:14px;
-                    background:{bg};border:1px solid rgba(0,0,0,.06);
-                    box-shadow:0 1px 2px rgba(0,0,0,.04);
-                ">
-                    <div style="font-weight:600;margin-bottom:6px;font-size:16px;line-height:1.2;">{title}</div>
-                    <div style="font-size:12px;color:#666;margin-bottom:10px;">{subtitle}</div>
-                    <div style="display:flex;justify-content:space-between;align-items:center;">
-                        <span style="font-size:12px;">{label}</span>
-                        <span style="background:#111;color:#fff;border-radius:999px;padding:4px 10px;font-size:12px;">{revenue}</span>
-                    </div>
-                </div>
-                """,
-                            unsafe_allow_html=True,
-                        )
-
+                            st.markdown(
+                                f"""
+<div style="
+  border-radius:16px;padding:14px;
+  background:{bg};border:1px solid rgba(0,0,0,.06);
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+">
+  <div style="font-weight:600;margin-bottom:6px;font-size:16px;line-height:1.2;">{title}</div>
+  <div style="font-size:12px;color:#666;margin-bottom:10px;">{subtitle}</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <span style="font-size:12px;">{label}</span>
+    <span style="background:#111;color:#fff;border-radius:999px;padding:4px 10px;font-size:12px;">{revenue}</span>
+  </div>
+</div>
+""",
+                                unsafe_allow_html=True,
+                            )
         else:
             st.info("Upload both files, pick items, then click **Generate**.")
 
