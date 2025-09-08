@@ -286,7 +286,6 @@ def hourly_revenue_cumulative(slots: List[Slot]) -> pd.DataFrame:
 # ───────── UI (centered controls; summary table + chart) ─────────
 st.set_page_config(page_title="TV Scheduler (ChatGPT × Márk Németh)", layout="wide")
 st.markdown("<h1 style='text-align:center;margin-top:0;'>TV Scheduler</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center;color:gray;'>Made by ChatGPT, based on the work by Márk Németh</p>", unsafe_allow_html=True)
 
 # CSS: sticky table look, uses the same red tone as Streamlit tags for movie rows
 st.markdown("""
