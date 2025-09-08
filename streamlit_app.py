@@ -397,6 +397,7 @@ with center:
     with right_area:
         st.subheader("Revenue by Hour")
         if st.session_state["ran"] and st.session_state["slots"]:
+            rev_df = hourly_revenue_cumulative(st.session_state["slots"])  # now returns per-hour
             # Labels like "08–09", "09–10", …
             rev_df.index = [
                 f"{idx.strftime('%H')}-{(idx + pd.Timedelta(hours=1)).strftime('%H')}"
