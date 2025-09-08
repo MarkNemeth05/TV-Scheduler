@@ -231,7 +231,6 @@ def analyze_ad(slots: List[Slot], ad: Ad) -> Dict[str, float | int]:
 # ───────── UI (centered row of controls; results underneath) ─────────
 st.set_page_config(page_title="TV Scheduler (ChatGPT × Márk Németh)", layout="wide")
 st.markdown("<h1 style='text-align:center;margin-top:0;'>TV Scheduler</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center;color:gray;'>Made by ChatGPT, based on the work by Márk Németh</p>", unsafe_allow_html=True)
 
 # Initialize session state once
 defaults = {
